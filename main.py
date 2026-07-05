@@ -5,7 +5,7 @@ from src.translate.ollama import TranslateGemma
 
 # ── OCR picker ──────────────────────────────────────────
 # Change OCR to: "mistral", "deepseek", "ollama", "yomitoku", "paddle", "meiki"
-OCR = "ollama"
+OCR = "meiki"
 
 if OCR == "mistral":
     from src.ocr.mistral import MistralOCR as OCRImpl
@@ -36,7 +36,7 @@ def main():
 
     src = ocr.run()
     texts = ocr.extract(src)
-    if not texts or all(len(t) < 8 for t in texts):
+    if not texts or all(len(t) < 3 for t in texts):
         print(None)
         return
     for txt in texts:
