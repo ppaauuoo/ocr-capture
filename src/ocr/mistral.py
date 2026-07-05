@@ -28,7 +28,7 @@ class MistralOCR:
         with open(image_path, "rb") as image_file:
             return base64.b64encode(image_file.read()).decode("utf-8")
 
-    def extract(ocr_response) -> List[str]:
+    def extract(self, ocr_response) -> List[str]:
         """Print clean lines from Mistral OCR response as a list."""
         lines = []
         seen = set()
@@ -38,6 +38,6 @@ class MistralOCR:
                 if stripped and len(stripped) > 3:
                     if stripped not in seen:
                         seen.add(stripped)
-                        print(f"- {stripped}")
+                        # print(f"- {stripped}")
                         lines.append(stripped)
         return lines
