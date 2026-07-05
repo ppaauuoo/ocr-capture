@@ -8,3 +8,4 @@ wheels/
 *.pyc
 .python-version
 .env
+temp

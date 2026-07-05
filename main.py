@@ -19,8 +19,8 @@ def main():
 
     src = mistral.run()
     texts = mistral.extract(src)
-    # ponytail: any line < 15 chars = probably just numbers/artifacts
-    if not texts or all(len(t) < 15 for t in texts):
+    # ponytail: no line with >= 8 real chars = whitespace-only capture
+    if not texts or all(len(t) < 8 for t in texts):
         print(None)
         return
     for txt in texts:

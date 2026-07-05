@@ -38,6 +38,6 @@ class MistralOCR:
                 if stripped and len(stripped) > 3:
                     if stripped not in seen:
                         seen.add(stripped)
-                        # print(f"- {stripped}")
+                        print(f"-> {stripped}")
                         lines.append(stripped)
         return lines
