@@ -21,7 +21,7 @@ class MistralOCR:
                 "image_url": f"data:image/jpeg;base64,{base64_image}",
             },
             # table_format=None,
-            include_image_base64=True,
+            include_image_base64=False,
         )
 
     def encode_image(self, image_path):

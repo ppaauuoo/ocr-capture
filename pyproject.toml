@@ -9,5 +9,6 @@ dependencies = [
     "mistral>=22.0.0",
     "mistralai>=2.5.2",
     "ollama>=0.6.2",
+    "pillow>=12.3.0",
     "windows-capture>=2.0.0",
 ]
