@@ -1,0 +1,10 @@
+[project]
+name = "ocr-capture"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "mistral>=22.0.0",
+    "windows-capture>=2.0.0",
+]
