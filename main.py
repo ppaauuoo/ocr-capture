@@ -1,32 +1,41 @@
 from PIL import Image as PILImage
 from src.capture import Capture
 from src.click_region import get_region
-from src.ocr.mistral import MistralOCR
 from src.translate.ollama import TranslateGemma
 
-try:
-    from src.ocr.deepseekocr2 import DeepseekOCR2
+# ── OCR picker ──────────────────────────────────────────
+# Change OCR to: "mistral", "deepseek", "ollama", "yomitoku", "paddle", "meiki"
+OCR = "ollama"
 
-    ocr = DeepseekOCR2()
-    print("Using DeepSeek OCR")
-except Exception:
-    ocr = MistralOCR()
-    print("DeepSeek not available, falling back to Mistral OCR")
+if OCR == "mistral":
+    from src.ocr.mistral import MistralOCR as OCRImpl
+elif OCR == "deepseek":
+    from src.ocr.deepseekocr2 import DeepseekOCR2 as OCRImpl
+elif OCR == "ollama":
+    from src.ocr.ollama_vlm import OllamaVisionOCR as OCRImpl
+elif OCR == "yomitoku":
+    from src.ocr.yomitoku_ocr import YomiTokuOCR as OCRImpl
+elif OCR == "paddle":
+    from src.ocr.paddle_ocr import PaddleOCREngine as OCRImpl
+elif OCR == "meiki":
+    from src.ocr.meiki_ocr import MeikiOCREngine as OCRImpl
+else:
+    raise ValueError(f"Unknown OCR: {OCR}")
+
+ocr = OCRImpl()
 
 
 def main():
     region = get_region()
 
-    Capture().run()  # saves full screen to temp/image.png
+    Capture().run()
 
-    # Crop full-screen capture to the user-defined region
     img = PILImage.open("temp/image.png")
     cropped = img.crop((region.x1, region.y1, region.x2, region.y2))
     cropped.save("temp/image.png")
 
     src = ocr.run()
     texts = ocr.extract(src)
-    # ponytail: no line with >= 8 real chars = whitespace-only capture
     if not texts or all(len(t) < 8 for t in texts):
         print(None)
         return
