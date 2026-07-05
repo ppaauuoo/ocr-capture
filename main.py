@@ -19,6 +19,10 @@ def main():
 
     src = mistral.run()
     texts = mistral.extract(src)
+    # ponytail: any line < 15 chars = probably just numbers/artifacts
+    if not texts or all(len(t) < 15 for t in texts):
+        print(None)
+        return
     for txt in texts:
         translated_text = TranslateGemma().run(txt)
         print(translated_text)
