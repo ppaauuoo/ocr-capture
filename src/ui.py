@@ -1,4 +1,6 @@
 """PySide6 UI: capture screen → drag-crop → OCR → translate."""
+import ctypes
+import ctypes.wintypes
 import sys
 import threading
 from PIL import Image
@@ -7,7 +9,7 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout,
     QPushButton, QComboBox, QLabel, QTextEdit,
 )
-from PySide6.QtCore import Qt, Signal, QRectF
+from PySide6.QtCore import Qt, Signal, QRectF, QAbstractNativeEventFilter
 from PySide6.QtGui import QPixmap, QPainter, QPen, QColor, QBrush
 
 from src.capture import Capture
@@ -62,6 +64,10 @@ class OverlayWindow(QWidget):
             painter.setBrush(QBrush(QColor(0, 255, 0, 30)))
             painter.drawRect(rect)
 
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key_Escape:
+            self.close()
+
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
             self._drag_start = event.position()
@@ -90,7 +96,33 @@ class OverlayWindow(QWidget):
             self.close()
 
 
-# ── Main window ───────────────────────────────────────────
+# ── Global hotkey (Alt+Shift+T) via Win32 ────────────────
+MOD_ALT = 0x0001
+MOD_SHIFT = 0x0004
+WM_HOTKEY = 0x0312
+VK_T = 0x54
+_HOTKEY_ID = 1
+
+
+class GlobalHotkeyFilter(QAbstractNativeEventFilter):
+    def __init__(self, callback):
+        super().__init__()
+        self._callback = callback
+        self._user32 = ctypes.windll.user32
+        self._user32.RegisterHotKey(None, _HOTKEY_ID, MOD_ALT | MOD_SHIFT, VK_T)
+
+    def nativeEventFilter(self, eventType, message):
+        if eventType == b"windows_generic_MSG":
+            msg = ctypes.wintypes.MSG.from_address(int(message))
+            if msg.message == WM_HOTKEY and msg.wParam == _HOTKEY_ID:
+                self._callback()
+                return True, 0
+        return False, 0
+
+    def unregister(self):
+        self._user32.UnregisterHotKey(None, _HOTKEY_ID)
+
+
 class MainWindow(QMainWindow):
     status_changed = Signal(str)
     result_changed = Signal(str)
@@ -99,6 +131,10 @@ class MainWindow(QMainWindow):
         super().__init__()
         self._ocr = None
         self._ocr_name = "meiki"
+
+        # Global hotkey
+        self._hotkey = GlobalHotkeyFilter(self._on_hotkey_capture)
+        QApplication.instance().installNativeEventFilter(self._hotkey)
 
         self.setWindowTitle("OCR Capture")
         self.setFixedSize(320, 300)
@@ -132,16 +168,26 @@ class MainWindow(QMainWindow):
         self.status_changed.connect(self._status.setText)
         self.result_changed.connect(self._result.setText)
 
+    def closeEvent(self, event):
+        self._hotkey.unregister()
+        super().closeEvent(event)
+
+    def _on_hotkey_capture(self):
+        """Called on Alt+Shift+T: same as clicking CAPTURE button."""
+        self._do_capture()
+
     def _on_ocr_changed(self, name):
         self._ocr_name = name
         self._ocr = None
 
     def _do_capture(self):
         self.status_changed.emit("Capturing…")
-        Capture().run()
+        screen = QApplication.instance().primaryScreen()
+        geo = screen.geometry()
+        from PIL import ImageGrab
+        ImageGrab.grab(bbox=(geo.x(), geo.y(), geo.x() + geo.width(), geo.y() + geo.height())).save("temp/image.png")
 
         qimg = QPixmap("temp/image.png")
-        geo = self.screen().geometry()
         self._overlay = OverlayWindow(qimg, geo)
         self._overlay.crop_done.connect(self._on_crop)
         self._overlay.show()
