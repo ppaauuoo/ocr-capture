@@ -39,8 +39,7 @@ def main():
     if not texts or all(len(t) < 3 for t in texts):
         print(None)
         return
-    for txt in texts:
-        translated_text = TranslateGemma().run(txt)
+    for translated_text in TranslateGemma().run_many(texts):
         print(translated_text)
 
 

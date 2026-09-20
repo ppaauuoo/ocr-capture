@@ -18,6 +18,7 @@ from src.translate.ollama import TranslateGemma
 # ── OCR registry ──────────────────────────────────────────
 OCR_OPTIONS = {
     "meiki": "src.ocr.meiki_ocr:MeikiOCREngine",
+    "manga": "src.ocr.manga_ocr:MangaOCREngine",
     "yomitoku": "src.ocr.yomitoku_ocr:YomiTokuOCR",
     "ollama": "src.ocr.ollama_vlm:OllamaVisionOCR",
     "mistral": "src.ocr.mistral:MistralOCR",
@@ -96,11 +97,10 @@ class OverlayWindow(QWidget):
             self.close()
 
 
-# ── Global hotkey (Alt+Shift+T) via Win32 ────────────────
-MOD_ALT = 0x0001
-MOD_SHIFT = 0x0004
+# ── Global hotkey (Ctrl+S) via Win32 ─────────────────────
+MOD_CONTROL = 0x0002
 WM_HOTKEY = 0x0312
-VK_T = 0x54
+VK_S = 0x53
 _HOTKEY_ID = 1
 
 
@@ -109,7 +109,7 @@ class GlobalHotkeyFilter(QAbstractNativeEventFilter):
         super().__init__()
         self._callback = callback
         self._user32 = ctypes.windll.user32
-        self._user32.RegisterHotKey(None, _HOTKEY_ID, MOD_ALT | MOD_SHIFT, VK_T)
+        self._user32.RegisterHotKey(None, _HOTKEY_ID, MOD_CONTROL, VK_S)
 
     def nativeEventFilter(self, eventType, message):
         if eventType == b"windows_generic_MSG":
@@ -137,7 +137,7 @@ class MainWindow(QMainWindow):
         QApplication.instance().installNativeEventFilter(self._hotkey)
 
         self.setWindowTitle("OCR Capture")
-        self.setFixedSize(320, 300)
+        self.setFixedSize(320, 420)
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -154,6 +154,7 @@ class MainWindow(QMainWindow):
         self._btn.setMinimumHeight(40)
         self._btn.clicked.connect(self._do_capture)
         layout.addWidget(self._btn)
+        layout.addWidget(QLabel("Shortcut: Ctrl+S   (Esc cancels selection)"))
 
         layout.addWidget(QLabel("Status:"))
         self._status = QLabel("Ready. Click CAPTURE.")
@@ -162,7 +163,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(QLabel("Result:"))
         self._result = QTextEdit()
         self._result.setReadOnly(True)
-        self._result.setMaximumHeight(120)
+        self._result.setFixedHeight(210)  # Half of the 420px window
         layout.addWidget(self._result)
 
         self.status_changed.connect(self._status.setText)
@@ -173,7 +174,7 @@ class MainWindow(QMainWindow):
         super().closeEvent(event)
 
     def _on_hotkey_capture(self):
-        """Called on Alt+Shift+T: same as clicking CAPTURE button."""
+        """Called on Ctrl+S: same as clicking CAPTURE button."""
         self._do_capture()
 
     def _on_ocr_changed(self, name):
