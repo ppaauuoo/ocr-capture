@@ -136,7 +136,11 @@ class LlamaCppRuntime:
         if binary:
             return binary
 
-        self._notify(status_callback, f"Preparing the {self.name} llama.cpp runtime (first use)…")
+        build_log = self.cache_dir / "build.log"
+        self._notify(
+            status_callback,
+            f"Preparing the {self.name} llama.cpp runtime (first use). Build log: {build_log}",
+        )
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         git_config = source / ".git" / "config"
         config_text = (
@@ -150,13 +154,22 @@ class LlamaCppRuntime:
             source.mkdir(parents=True)
             self._run_logged(["git", "init", "--quiet"], source)
             self._run_logged(["git", "remote", "add", "origin", self.repository], source)
+        self._notify(
+            status_callback,
+            f"Fetching pinned llama.cpp source {self.commit[:12]}… Build log: {build_log}",
+        )
         self._run_logged(["git", "fetch", "--depth", "1", "origin", self.commit], source)
         self._run_logged(["git", "checkout", "--detach", "FETCH_HEAD"], source)
+        self._notify(status_callback, f"Configuring CPU-only CMake build. Build log: {build_log}")
         self._run_logged([
             "cmake", "-S", str(source), "-B", str(build),
             "-DCMAKE_BUILD_TYPE=Release", "-DGGML_CUDA=OFF", "-DGGML_VULKAN=OFF",
         ], source)
         build_jobs = min(os.process_cpu_count() or 2, 8)
+        self._notify(
+            status_callback,
+            f"Compiling llama-server with {build_jobs} workers. Build log: {build_log}",
+        )
         self._run_logged([
             "cmake", "--build", str(build), "--config", "Release",
             "--target", "llama-server", "--parallel", str(build_jobs),

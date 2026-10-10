@@ -158,6 +158,7 @@ class RuntimeLifecycleTests(unittest.TestCase):
             (source / ".git").mkdir(parents=True)
             (source / ".git" / "config").write_text("[core]\nrepositoryformatversion = 0\n")
             commands = []
+            status_messages = []
             binary_name = "llama-server.exe" if os.name == "nt" else "llama-server"
 
             def record_command(command, cwd, timeout=300):
@@ -168,7 +169,7 @@ class RuntimeLifecycleTests(unittest.TestCase):
                     binary.touch()
 
             runtime._run_logged = record_command
-            binary = runtime._ensure_server_binary(None)
+            binary = runtime._ensure_server_binary(status_messages.append)
             self.assertEqual(binary.name, binary_name)
             self.assertIn(
                 ["git", "remote", "add", "origin", LLAMA_CPP_REPOSITORY],
@@ -177,6 +178,14 @@ class RuntimeLifecycleTests(unittest.TestCase):
             self.assertLess(
                 commands.index(["git", "remote", "add", "origin", LLAMA_CPP_REPOSITORY]),
                 commands.index(["git", "fetch", "--depth", "1", "origin", LLAMA_CPP_COMMIT]),
+            )
+            for phase in ("fetching", "configuring", "compiling"):
+                self.assertTrue(
+                    any(phase in message.lower() for message in status_messages),
+                    f"missing {phase} status: {status_messages}",
+                )
+            self.assertTrue(
+                any(str(Path(cache_dir) / "build.log") in message for message in status_messages)
             )
 
     def test_shutdown_does_not_wait_for_runtime_initialization(self):
