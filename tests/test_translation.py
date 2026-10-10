@@ -1,13 +1,15 @@
 import json
+import os
 import tempfile
 import threading
 import unittest
+from http.client import IncompleteRead
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import Mock, patch
 
 from src.translate import DEFAULT_TRANSLATION_ENGINE, create_translator
-from src.translate.hy_mt2 import HyMT2, HyMT2Runtime
+from src.translate.hy_mt2 import HyMT2, HyMT2Runtime, LLAMA_CPP_COMMIT, LLAMA_CPP_REPOSITORY
 
 
 class TranslationEndpoint(BaseHTTPRequestHandler):
@@ -69,6 +71,15 @@ class TranslationTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "STQ kernel is unavailable"):
             engine.run("こんにちは")
 
+    def test_incomplete_response_is_wrapped_as_translation_error(self):
+        engine = HyMT2(runtime=FakeRuntime("http://127.0.0.1:12345"))
+        with patch(
+            "src.translate.hy_mt2.urllib.request.urlopen",
+            side_effect=IncompleteRead(b"partial response"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "Hy-MT2 translation failed"):
+                engine.run("こんにちは")
+
 
 class RuntimeLifecycleTests(unittest.TestCase):
     def test_unhealthy_runtime_is_restarted(self):
@@ -93,6 +104,34 @@ class RuntimeLifecycleTests(unittest.TestCase):
             stale_process.terminate.assert_called_once()
             self.assertIs(runtime._process, started_process)
             runtime.shutdown()
+
+    def test_partial_git_setup_is_recreated(self):
+        with tempfile.TemporaryDirectory() as cache_dir:
+            runtime = HyMT2Runtime(cache_dir)
+            source = Path(cache_dir) / f"llama.cpp-{LLAMA_CPP_COMMIT[:12]}"
+            (source / ".git").mkdir(parents=True)
+            (source / ".git" / "config").write_text("[core]\nrepositoryformatversion = 0\n")
+            commands = []
+            binary_name = "llama-server.exe" if os.name == "nt" else "llama-server"
+
+            def record_command(command, cwd, timeout=300):
+                commands.append(command)
+                if command[:2] == ["cmake", "--build"]:
+                    binary = Path(command[2]) / "bin" / binary_name
+                    binary.parent.mkdir(parents=True, exist_ok=True)
+                    binary.touch()
+
+            runtime._run_logged = record_command
+            binary = runtime._ensure_server_binary(None)
+            self.assertEqual(binary.name, binary_name)
+            self.assertIn(
+                ["git", "remote", "add", "origin", LLAMA_CPP_REPOSITORY],
+                commands,
+            )
+            self.assertLess(
+                commands.index(["git", "remote", "add", "origin", LLAMA_CPP_REPOSITORY]),
+                commands.index(["git", "fetch", "--depth", "1", "origin", LLAMA_CPP_COMMIT]),
+            )
 
     def test_shutdown_does_not_wait_for_runtime_initialization(self):
         with tempfile.TemporaryDirectory() as cache_dir:

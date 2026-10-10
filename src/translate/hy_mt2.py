@@ -1,6 +1,7 @@
 """Hy-MT2 translation through a locally built, STQ-capable llama.cpp server."""
 import atexit
 import hashlib
+import http.client
 import json
 import os
 import shutil
@@ -8,7 +9,6 @@ import socket
 import subprocess
 import threading
 import time
-import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -46,11 +46,7 @@ class HyMT2Runtime:
             if process and process.poll() is None:
                 if base_url and self._is_model_server(base_url):
                     return base_url
-                self._stop_process(process)
-                with self._process_lock:
-                    if self._process is process:
-                        self._process = None
-                        self._base_url = None
+                self._discard_server(process)
 
             binary = self._ensure_server_binary(status_callback)
             self._raise_if_closing()
@@ -81,11 +77,7 @@ class HyMT2Runtime:
             try:
                 self._wait_until_ready(status_callback, process, base_url)
             except Exception:
-                self._stop_process(process)
-                with self._process_lock:
-                    if self._process is process:
-                        self._process = None
-                        self._base_url = None
+                self._discard_server(process)
                 raise
             return base_url
 
@@ -113,6 +105,13 @@ class HyMT2Runtime:
             process.kill()
             process.wait()
 
+    def _discard_server(self, process):
+        self._stop_process(process)
+        with self._process_lock:
+            if self._process is process:
+                self._process = None
+                self._base_url = None
+
     def _raise_if_closing(self):
         if self._closing.is_set():
             raise RuntimeError("Hy-MT2 runtime is shutting down.")
@@ -125,6 +124,7 @@ class HyMT2Runtime:
             build / "bin" / "Release" / binary_name,
             build / "bin" / binary_name,
         )
+
         def find_binary():
             for candidate in candidates:
                 if candidate.is_file():
@@ -137,7 +137,16 @@ class HyMT2Runtime:
 
         self._notify(status_callback, "Building the pinned STQ-capable llama.cpp runtime (first use)…")
         self.cache_dir.mkdir(parents=True, exist_ok=True)
-        if not (source / ".git").exists():
+        git_config = source / ".git" / "config"
+        config_text = (
+            git_config.read_text(encoding="utf-8", errors="replace")
+            if git_config.is_file()
+            else ""
+        )
+        if (
+            '[remote "origin"]' not in config_text
+            or f"url = {LLAMA_CPP_REPOSITORY}" not in config_text
+        ):
             if source.exists():
                 shutil.rmtree(source)
             source.mkdir(parents=True)
@@ -306,7 +315,10 @@ class HyMT2:
         try:
             with urllib.request.urlopen(request, timeout=1800) as response:
                 result = json.load(response)["choices"][0]["message"]["content"].strip()
-        except (urllib.error.URLError, KeyError, IndexError, TypeError, ValueError) as error:
+        except (
+            OSError, http.client.HTTPException, KeyError, IndexError,
+            TypeError, ValueError, AttributeError,
+        ) as error:
             raise RuntimeError(f"Hy-MT2 translation failed: {error}") from error
         if not result:
             raise RuntimeError("Hy-MT2 returned an empty translation.")
