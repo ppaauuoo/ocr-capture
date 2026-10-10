@@ -5,7 +5,7 @@ Screenshot → crop → OCR → translate. Two modes:
 ## GUI (default)
 
 ```
-uv run python -m src.ui
+uv run ocr-capture
 ```
 
 - Select OCR engine from dropdown (meiki, yomitoku, ollama, mistral, deepseek)
