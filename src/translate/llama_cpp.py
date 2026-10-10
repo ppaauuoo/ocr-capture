@@ -158,7 +158,7 @@ class LlamaCppRuntime:
         ], source)
         self._run_logged([
             "cmake", "--build", str(build), "--config", "Release",
-            "--target", "llama-server", "--parallel", "2",
+            "--target", "llama-server", "--parallel", "4",
         ], source, timeout=1800)
         binary = find_binary()
         if binary:
