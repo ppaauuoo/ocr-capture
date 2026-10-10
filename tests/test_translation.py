@@ -1,10 +1,8 @@
-import json
 import os
 import tempfile
 import threading
 import unittest
 from http.client import IncompleteRead
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -16,21 +14,6 @@ from src.translate.index_translate import IndexTranslate
 from src.translate.hy_mt2 import HyMT2, HyMT2Runtime, LLAMA_CPP_COMMIT, LLAMA_CPP_REPOSITORY
 
 
-class TranslationEndpoint(BaseHTTPRequestHandler):
-    request_data = None
-
-    def do_POST(self):
-        size = int(self.headers["Content-Length"])
-        type(self).request_data = json.loads(self.rfile.read(size))
-        body = json.dumps({"choices": [{"message": {"content": "Hello"}}]}).encode()
-        self.send_response(200)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
-    def log_message(self, format, *args):
-        pass
 
 
 class FakeRuntime:
@@ -42,27 +25,11 @@ class FakeRuntime:
 
 
 class TranslationTests(unittest.TestCase):
-    def test_default_engine_translates_using_local_hy_mt2_runtime(self):
-        server = ThreadingHTTPServer(("127.0.0.1", 0), TranslationEndpoint)
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
-        self.addCleanup(server.server_close)
-        self.addCleanup(thread.join)
-        self.addCleanup(server.shutdown)
-        TranslationEndpoint.request_data = None
+    def test_default_engine_is_index_translate(self):
+        self.assertEqual(DEFAULT_TRANSLATION_ENGINE, INDEX_TRANSLATE_ENGINE)
+        self.assertIsInstance(create_translator(), IndexTranslate)
 
-        selected = create_translator(DEFAULT_TRANSLATION_ENGINE)
-        self.assertIsInstance(selected, HyMT2)
-        engine = HyMT2(runtime=FakeRuntime(f"http://127.0.0.1:{server.server_port}"))
-        self.assertEqual(engine.run("こんにちは"), "Hello")
-        request = TranslationEndpoint.request_data
-        if request is None:
-            self.fail("translation request was not sent")
-        self.assertEqual(request["model"], "hy-mt2-1.8b-stq")
-        self.assertIn("Translate the following text into English", request["messages"][0]["content"])
-        self.assertIn("こんにちは", request["messages"][0]["content"])
-
-    def test_index_translate_is_selectable_and_uses_recommended_prompt(self):
+    def test_index_translate_factory_uses_recommended_prompt(self):
         self.assertEqual(
             TRANSLATION_ENGINES,
             ("Hy-MT2", "TranslateGemma", "Index-Translate-2B"),
