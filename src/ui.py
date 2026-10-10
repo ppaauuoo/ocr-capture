@@ -12,8 +12,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Signal, QRectF, QAbstractNativeEventFilter
 from PySide6.QtGui import QPixmap, QPainter, QPen, QColor, QBrush
 
-from src.capture import Capture
-from src.translate.ollama import TranslateGemma
+from src.translate import DEFAULT_TRANSLATION_ENGINE, TRANSLATION_ENGINES, create_translator
 
 # ── OCR registry ──────────────────────────────────────────
 OCR_OPTIONS = {
@@ -131,13 +130,13 @@ class MainWindow(QMainWindow):
         super().__init__()
         self._ocr = None
         self._ocr_name = "meiki"
-
+        self._translation_name = DEFAULT_TRANSLATION_ENGINE
         # Global hotkey
         self._hotkey = GlobalHotkeyFilter(self._on_hotkey_capture)
         QApplication.instance().installNativeEventFilter(self._hotkey)
 
         self.setWindowTitle("OCR Capture")
-        self.setFixedSize(320, 420)
+        self.setFixedSize(360, 470)
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -150,6 +149,13 @@ class MainWindow(QMainWindow):
         self._combo.currentTextChanged.connect(self._on_ocr_changed)
         layout.addWidget(self._combo)
 
+        layout.addWidget(QLabel("Translation Engine:"))
+        self._translation_combo = QComboBox()
+        self._translation_combo.addItems(TRANSLATION_ENGINES)
+        self._translation_combo.setCurrentText(self._translation_name)
+        self._translation_combo.currentTextChanged.connect(self._on_translation_changed)
+        layout.addWidget(self._translation_combo)
+
         self._btn = QPushButton("CAPTURE")
         self._btn.setMinimumHeight(40)
         self._btn.clicked.connect(self._do_capture)
@@ -158,12 +164,13 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(QLabel("Status:"))
         self._status = QLabel("Ready. Click CAPTURE.")
+        self._status.setWordWrap(True)
         layout.addWidget(self._status)
 
         layout.addWidget(QLabel("Result:"))
         self._result = QTextEdit()
         self._result.setReadOnly(True)
-        self._result.setFixedHeight(210)  # Half of the 420px window
+        self._result.setFixedHeight(210)
         layout.addWidget(self._result)
 
         self.status_changed.connect(self._status.setText)
@@ -181,6 +188,9 @@ class MainWindow(QMainWindow):
         self._ocr_name = name
         self._ocr = None
 
+    def _on_translation_changed(self, name):
+        self._translation_name = name
+
     def _do_capture(self):
         self.status_changed.emit("Capturing…")
         screen = QApplication.instance().primaryScreen()
@@ -197,9 +207,13 @@ class MainWindow(QMainWindow):
         self.status_changed.emit(f"Cropped {x2-x1}x{y2-y1}, running OCR…")
         img = Image.open("temp/image.png")
         img.crop((x1, y1, x2, y2)).save("temp/image.png")
-        threading.Thread(target=self._run_pipeline, daemon=True).start()
+        threading.Thread(
+            target=self._run_pipeline,
+            args=(self._translation_name,),
+            daemon=True,
+        ).start()
 
-    def _run_pipeline(self):
+    def _run_pipeline(self, translation_name=DEFAULT_TRANSLATION_ENGINE):
         try:
             if self._ocr is None:
                 self._ocr = _load_ocr(self._ocr_name)
@@ -208,7 +222,11 @@ class MainWindow(QMainWindow):
             if not texts or all(len(t) < 3 for t in texts):
                 self.status_changed.emit("No text found.")
                 return
-            lines = [TranslateGemma().run(t) for t in texts]
+            translator = create_translator(
+                translation_name,
+                status_callback=self.status_changed.emit,
+            )
+            lines = translator.run_many(texts)
             self.result_changed.emit("\n".join(lines))
             self.status_changed.emit(f"Done ({len(lines)} lines)")
         except Exception as e:

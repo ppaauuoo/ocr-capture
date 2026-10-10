@@ -1,7 +1,7 @@
 from PIL import Image as PILImage
 from src.capture import Capture
 from src.click_region import get_region
-from src.translate.ollama import TranslateGemma
+from src.translate import create_translator
 
 # ── OCR picker ──────────────────────────────────────────
 # Change OCR to: "mistral", "deepseek", "ollama", "yomitoku", "paddle", "meiki"
@@ -39,7 +39,7 @@ def main():
     if not texts or all(len(t) < 3 for t in texts):
         print(None)
         return
-    for translated_text in TranslateGemma().run_many(texts):
+    for translated_text in create_translator(status_callback=print).run_many(texts):
         print(translated_text)
 
 
