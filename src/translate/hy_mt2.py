@@ -21,6 +21,10 @@ MODEL_FILENAME = "Hy-MT2-1.8B-1.25Bit.gguf"
 MODEL_SIZE = 461_860_800
 MODEL_SHA256 = "cc497fe8f033b52b3b8b00a7669e9661435432f9d4cd43f7ed24400c01507a93"
 MODEL_ALIAS = "hy-mt2-1.8b-stq"
+BUILD_TOOLS_HINT = (
+    "Install Git, CMake, and a C++ compiler "
+    "(Visual Studio Build Tools with the C++ workload on Windows)."
+)
 
 
 class HyMT2Runtime:
@@ -28,22 +32,33 @@ class HyMT2Runtime:
         data_root = Path(os.environ.get("LOCALAPPDATA") or Path.home() / ".cache")
         self.cache_dir = Path(cache_dir).resolve() if cache_dir else data_root / "ocr-capture" / "hy-mt2"
         self._lock = threading.Lock()
+        self._process_lock = threading.Lock()
         self._process: subprocess.Popen | None = None
+        self._build_process: subprocess.Popen | None = None
         self._base_url: str | None = None
+        self._closing = threading.Event()
 
     def ensure_ready(self, status_callback=None) -> str:
         with self._lock:
-            if self._process and self._process.poll() is None:
-                if self._base_url and self._is_model_server(self._base_url):
-                    return self._base_url
-                raise RuntimeError("The Hy-MT2 llama.cpp server stopped responding.")
+            self._raise_if_closing()
+            with self._process_lock:
+                process, base_url = self._process, self._base_url
+            if process and process.poll() is None:
+                if base_url and self._is_model_server(base_url):
+                    return base_url
+                self._stop_process(process)
+                with self._process_lock:
+                    if self._process is process:
+                        self._process = None
+                        self._base_url = None
 
             binary = self._ensure_server_binary(status_callback)
+            self._raise_if_closing()
             model = self._ensure_model(status_callback)
+            self._raise_if_closing()
 
             port = self._free_port()
             base_url = f"http://127.0.0.1:{port}"
-            self._base_url = base_url
             command = [
                 str(binary), "--model", str(model), "--alias", MODEL_ALIAS,
                 "--host", "127.0.0.1", "--port", str(port),
@@ -55,27 +70,52 @@ class HyMT2Runtime:
             log_path = self.cache_dir / "server.log"
             creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
             with log_path.open("ab") as log:
-                self._process = subprocess.Popen(
-                    command, stdout=log, stderr=subprocess.STDOUT,
-                    creationflags=creationflags,
-                )
-            process = self._process
-            if process is None:
-                raise RuntimeError("Could not start the Hy-MT2 llama.cpp server.")
-            self._wait_until_ready(status_callback, process, base_url)
+                with self._process_lock:
+                    self._raise_if_closing()
+                    process = subprocess.Popen(
+                        command, stdout=log, stderr=subprocess.STDOUT,
+                        creationflags=creationflags,
+                    )
+                    self._process = process
+                    self._base_url = base_url
+            try:
+                self._wait_until_ready(status_callback, process, base_url)
+            except Exception:
+                self._stop_process(process)
+                with self._process_lock:
+                    if self._process is process:
+                        self._process = None
+                        self._base_url = None
+                raise
             return base_url
 
     def shutdown(self):
-        with self._lock:
-            process, self._process = self._process, None
+        self._closing.set()
+        with self._process_lock:
+            processes = self._build_process, self._process
+            self._build_process = None
+            self._process = None
             self._base_url = None
-            if process and process.poll() is None:
-                process.terminate()
-                try:
-                    process.wait(timeout=10)
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait()
+        for process in processes:
+            self._stop_process(process)
+
+    @staticmethod
+    def _stop_process(process):
+        if process is None or process.poll() is not None:
+            return
+        try:
+            process.terminate()
+        except OSError:
+            return
+        try:
+            process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+
+    def _raise_if_closing(self):
+        if self._closing.is_set():
+            raise RuntimeError("Hy-MT2 runtime is shutting down.")
 
     def _ensure_server_binary(self, status_callback):
         source = self.cache_dir / f"llama.cpp-{LLAMA_CPP_COMMIT[:12]}"
@@ -138,6 +178,7 @@ class HyMT2Runtime:
         try:
             with urllib.request.urlopen(url, timeout=60) as response, part.open("wb") as output:
                 while chunk := response.read(1024 * 1024):
+                    self._raise_if_closing()
                     output.write(chunk)
                     digest.update(chunk)
                     received += len(chunk)
@@ -158,23 +199,32 @@ class HyMT2Runtime:
         try:
             with log_path.open("ab") as log:
                 log.write(("\n> " + " ".join(command) + "\n").encode())
-                result = subprocess.run(
-                    command, cwd=cwd, stdout=log, stderr=subprocess.STDOUT,
-                    check=False, timeout=timeout,
-                )
+                with self._process_lock:
+                    self._raise_if_closing()
+                    process = subprocess.Popen(
+                        command, cwd=cwd, stdout=log, stderr=subprocess.STDOUT,
+                    )
+                    self._build_process = process
+                try:
+                    return_code = process.wait(timeout=timeout)
+                except subprocess.TimeoutExpired as error:
+                    self._stop_process(process)
+                    raise RuntimeError(
+                        f"Timed out while running {command[0]} to prepare the Hy-MT2 runtime."
+                    ) from error
+                finally:
+                    with self._process_lock:
+                        if self._build_process is process:
+                            self._build_process = None
         except FileNotFoundError as error:
             raise RuntimeError(
-                f"Required build tool {command[0]!r} was not found. Install Git, CMake, "
-                "and a C++ compiler (Visual Studio Build Tools with the C++ workload on Windows)."
+                f"Required build tool {command[0]!r} was not found. {BUILD_TOOLS_HINT}"
             ) from error
-        except subprocess.TimeoutExpired as error:
-            raise RuntimeError(f"Timed out while running {command[0]} to prepare the Hy-MT2 runtime.") from error
-        if result.returncode:
+        if return_code:
             details = log_path.read_text(encoding="utf-8", errors="replace")[-4000:]
             raise RuntimeError(
                 f"Could not prepare the STQ-capable llama.cpp runtime ({command[0]} exited "
-                f"{result.returncode}). Install Git, CMake, and a C++ compiler; build log: "
-                f"{log_path}\n{details}"
+                f"{return_code}). {BUILD_TOOLS_HINT} Build log: {log_path}\n{details}"
             )
 
     def _wait_until_ready(self, status_callback, process, base_url):

@@ -1,10 +1,13 @@
 import json
+import tempfile
 import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from unittest.mock import Mock, patch
 
 from src.translate import DEFAULT_TRANSLATION_ENGINE, create_translator
-from src.translate.hy_mt2 import HyMT2
+from src.translate.hy_mt2 import HyMT2, HyMT2Runtime
 
 
 class TranslationEndpoint(BaseHTTPRequestHandler):
@@ -66,6 +69,72 @@ class TranslationTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "STQ kernel is unavailable"):
             engine.run("こんにちは")
 
+
+class RuntimeLifecycleTests(unittest.TestCase):
+    def test_unhealthy_runtime_is_restarted(self):
+        with tempfile.TemporaryDirectory() as cache_dir:
+            runtime = HyMT2Runtime(cache_dir)
+            stale_process = Mock()
+            stale_process.poll.return_value = None
+            started_process = Mock()
+            started_process.poll.return_value = None
+            runtime._process = stale_process
+            runtime._base_url = "http://127.0.0.1:12345"
+
+            with (
+                patch.object(runtime, "_is_model_server", return_value=False),
+                patch.object(runtime, "_ensure_server_binary", return_value=Path("llama-server")),
+                patch.object(runtime, "_ensure_model", return_value=Path("model.gguf")),
+                patch.object(runtime, "_wait_until_ready"),
+                patch("src.translate.hy_mt2.subprocess.Popen", return_value=started_process),
+            ):
+                runtime.ensure_ready()
+
+            stale_process.terminate.assert_called_once()
+            self.assertIs(runtime._process, started_process)
+            runtime.shutdown()
+
+    def test_shutdown_does_not_wait_for_runtime_initialization(self):
+        with tempfile.TemporaryDirectory() as cache_dir:
+            runtime = HyMT2Runtime(cache_dir)
+            entered_build = threading.Event()
+            release_build = threading.Event()
+            shutdown_done = threading.Event()
+            errors = []
+
+            def blocking_build(status_callback):
+                entered_build.set()
+                release_build.wait()
+                return Path("llama-server")
+
+            def unexpected_model_download(status_callback):
+                raise AssertionError("shutdown should cancel initialization before model download")
+
+            runtime._ensure_server_binary = blocking_build
+            runtime._ensure_model = unexpected_model_download
+
+            def ensure_runtime():
+                try:
+                    runtime.ensure_ready()
+                except Exception as error:
+                    errors.append(error)
+
+            worker = threading.Thread(target=ensure_runtime, daemon=True)
+            worker.start()
+            self.assertTrue(entered_build.wait(2))
+            closer = threading.Thread(
+                target=lambda: (runtime.shutdown(), shutdown_done.set()),
+                daemon=True,
+            )
+            closer.start()
+            try:
+                self.assertTrue(shutdown_done.wait(1), "shutdown blocked on runtime initialization")
+            finally:
+                release_build.set()
+                worker.join(2)
+                closer.join(2)
+            self.assertIsInstance(errors[0], RuntimeError)
+            self.assertIn("shutting down", str(errors[0]))
 
 if __name__ == "__main__":
     unittest.main()
