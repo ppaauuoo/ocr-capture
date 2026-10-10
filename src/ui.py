@@ -213,7 +213,7 @@ class MainWindow(QMainWindow):
             daemon=True,
         ).start()
 
-    def _run_pipeline(self, translation_name=DEFAULT_TRANSLATION_ENGINE):
+    def _run_pipeline(self, translation_name):
         try:
             if self._ocr is None:
                 self._ocr = _load_ocr(self._ocr_name)

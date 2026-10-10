@@ -85,11 +85,15 @@ class HyMT2Runtime:
             build / "bin" / "Release" / binary_name,
             build / "bin" / binary_name,
         )
-        for candidate in candidates:
-            if candidate.is_file():
-                return candidate
-        for candidate in build.rglob(binary_name) if build.exists() else ():
-            return candidate
+        def find_binary():
+            for candidate in candidates:
+                if candidate.is_file():
+                    return candidate
+            return next(build.rglob(binary_name), None) if build.exists() else None
+
+        binary = find_binary()
+        if binary:
+            return binary
 
         self._notify(status_callback, "Building the pinned STQ-capable llama.cpp runtime (first use)…")
         self.cache_dir.mkdir(parents=True, exist_ok=True)
@@ -109,11 +113,9 @@ class HyMT2Runtime:
             "cmake", "--build", str(build), "--config", "Release",
             "--target", "llama-server", "--parallel", "2",
         ], source, timeout=1800)
-        for candidate in candidates:
-            if candidate.is_file():
-                return candidate
-        for candidate in build.rglob(binary_name):
-            return candidate
+        binary = find_binary()
+        if binary:
+            return binary
         raise RuntimeError(f"llama.cpp build completed without producing {binary_name}.")
 
     def _ensure_model(self, status_callback):
