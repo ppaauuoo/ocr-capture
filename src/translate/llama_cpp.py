@@ -156,9 +156,10 @@ class LlamaCppRuntime:
             "cmake", "-S", str(source), "-B", str(build),
             "-DCMAKE_BUILD_TYPE=Release", "-DGGML_CUDA=OFF", "-DGGML_VULKAN=OFF",
         ], source)
+        build_jobs = min(os.process_cpu_count() or 2, 8)
         self._run_logged([
             "cmake", "--build", str(build), "--config", "Release",
-            "--target", "llama-server", "--parallel", "4",
+            "--target", "llama-server", "--parallel", str(build_jobs),
         ], source, timeout=1800)
         binary = find_binary()
         if binary:

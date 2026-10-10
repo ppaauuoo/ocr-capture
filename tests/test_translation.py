@@ -63,43 +63,47 @@ class TranslationTests(unittest.TestCase):
         self.assertIn("こんにちは", request["messages"][0]["content"])
 
     def test_index_translate_is_selectable_and_uses_recommended_prompt(self):
-        server = ThreadingHTTPServer(("127.0.0.1", 0), TranslationEndpoint)
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
-        self.addCleanup(server.server_close)
-        self.addCleanup(thread.join)
-        self.addCleanup(server.shutdown)
-        TranslationEndpoint.request_data = None
-
         self.assertEqual(
             TRANSLATION_ENGINES,
             ("Hy-MT2", "TranslateGemma", "Index-Translate-2B"),
         )
         selected = create_translator(INDEX_TRANSLATE_ENGINE)
         self.assertIsInstance(selected, IndexTranslate)
-        engine = IndexTranslate(runtime=FakeRuntime(f"http://127.0.0.1:{server.server_port}"))
-        self.assertEqual(engine.run("こんにちは"), "Hello")
-        request = TranslationEndpoint.request_data
-        if request is None:
-            self.fail("translation request was not sent")
-        self.assertEqual(request["model"], "Index-Translate-2B")
+        with (
+            patch("src.translate.index_translate._MODEL_READY", False),
+            patch(
+                "src.translate.index_translate.ollama.pull",
+                return_value=iter([{"status": "success"}]),
+            ) as pull,
+            patch(
+                "src.translate.index_translate.ollama.chat",
+                return_value={"message": {"content": "Hello"}},
+            ) as chat,
+        ):
+            self.assertEqual(selected.run("こんにちは"), "Hello")
+
+        model = "hf.co/IndexTeam/Index-Translate-2B-GGUF:Q4_K_M"
+        pull.assert_called_once_with(model, stream=True)
+        request = chat.call_args.kwargs
+        self.assertEqual(request["model"], model)
         self.assertEqual(
             request["messages"][0]["content"],
             "请将以下文本翻译为英语，直接输出翻译结果，不要进行任何解释。\n\nこんにちは",
         )
-        self.assertEqual(request["temperature"], 0)
-        self.assertEqual(request["max_tokens"], 1024)
-        self.assertEqual(request["chat_template_kwargs"], {"enable_thinking": False})
+        self.assertEqual(request["options"], {"temperature": 0, "num_predict": 1024})
+        self.assertIs(request["think"], False)
 
-    def test_index_initialization_error_is_not_hidden(self):
-        class FailedRuntime:
-            def ensure_ready(self, status_callback=None):
-                raise RuntimeError("llama.cpp build failed")
-
-        engine = IndexTranslate(runtime=FailedRuntime())
-        with self.assertRaisesRegex(RuntimeError, "llama.cpp build failed"):
-            engine.run("こんにちは")
-
+    def test_index_ollama_failure_is_not_hidden(self):
+        selected = create_translator(INDEX_TRANSLATE_ENGINE)
+        with (
+            patch("src.translate.index_translate._MODEL_READY", False),
+            patch(
+                "src.translate.index_translate.ollama.pull",
+                side_effect=RuntimeError("Ollama is unavailable"),
+            ),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "Ollama is unavailable"):
+                selected.run("こんにちは")
     def test_unknown_engine_is_rejected_instead_of_falling_back(self):
         with self.assertRaisesRegex(ValueError, "Unknown translation engine"):
             create_translator("unavailable")
